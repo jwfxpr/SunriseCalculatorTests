@@ -8,13 +8,11 @@ namespace SunriseCalculatorTests
     [TestClass]
     public class UnitTests
     {
-        private DateTime ReduceToMinutes(DateTime value) => new DateTime(value.Year, value.Month, value.Day, value.Hour, value.Minute, 0);
-
         private void AssertAreWithinNMinutes(DateTime expected, DateTime actual, int minutes = 1)
         {
             DateTime exp = ReduceToMinutes(expected);
             DateTime act = ReduceToMinutes(actual);
-            for (int i = 1; i < minutes; i++)
+            for (int i = 1; i <= minutes; i++)
             {
                 try
                 {
@@ -24,10 +22,7 @@ namespace SunriseCalculatorTests
                 catch (Exception)
                 {
                 }
-            }
 
-            for (int i = 1; i < minutes; i++)
-            {
                 try
                 {
                     Assert.AreEqual(exp, act.AddMinutes(-i));
@@ -41,105 +36,175 @@ namespace SunriseCalculatorTests
             Assert.AreEqual(exp, act);
         }
 
+        private DateTime ReduceToMinutes(DateTime value, bool round = false)
+            => new DateTime(value.Year, value.Month, value.Day, 
+                value.Hour, round ? value.Minute + (int)Math.Round(value.Second / 60.0) : value.Minute, 0);
+
+        [TestMethod]
+        public void ArcticResults()
+        {
+            double[] degreesFromPoleToTest = { 2, 5, 10, 15, 20/*, 22*/ };
+
+            foreach (var degreesFromPole in degreesFromPoleToTest)
+            {
+                DateTime northernMidsummer = new DateTime(2021, 6, 21);
+                DateTime equinox = new DateTime(2021, 9, 22);
+                DateTime southernMidsummer = new DateTime(2021, 12, 21);
+
+                SunriseCalc farNorth = new SunriseCalc(SunriseCalc.MaxLatitude - degreesFromPole, 0);
+                SunriseCalc farSouth = new SunriseCalc(SunriseCalc.MinLatitude + degreesFromPole, 0);
+
+                // Northern summer solstice
+                farNorth.Day = farSouth.Day = northernMidsummer;
+                DiurnalResult northResult = farNorth.GetSunrise(out DateTime northRise);
+                Assert.AreEqual(DiurnalResult.SunAlwaysAbove, northResult);
+                var southResult = farSouth.GetSunrise(out DateTime southRise);
+                Assert.AreEqual(DiurnalResult.SunAlwaysBelow, southResult);
+                // We still expect reasonable values for sunrise to be returned; north should be 12h before south
+                Assert.AreEqual(northRise.AddHours(12), southRise);
+
+                //Equinox
+                farNorth.Day = farSouth.Day = equinox;
+                //northResult = farNorth.GetSunrise(out northRise);
+                northResult = farNorth.GetSunrise(out _);
+                Assert.AreEqual(DiurnalResult.NormalDay, northResult);
+                //southResult = farSouth.GetSunrise(out southRise);
+                southResult = farSouth.GetSunrise(out _);
+                Assert.AreEqual(DiurnalResult.NormalDay, southResult);
+                // We don't expect these to be exactly equal, because we round to a day, rather than the instant of equinox
+                // But the closer to the pole we are, the more wildly the equinox times diverge!
+                // TODO: Requires investigation, may be fine, may be systematic error.
+                //AssertAreWithinNMinutes(northRise, southRise, 15);
+
+                // Southern summer solstice
+                farNorth.Day = farSouth.Day = southernMidsummer;
+                northResult = farNorth.GetSunrise(out northRise);
+                Assert.AreEqual(DiurnalResult.SunAlwaysBelow, northResult);
+                southResult = farSouth.GetSunrise(out southRise);
+                Assert.AreEqual(DiurnalResult.SunAlwaysAbove, southResult);
+                Assert.AreEqual(northRise, southRise.AddHours(12));
+            }
+        }
+
+        [TestMethod]
+        public void HorizonsTest()
+        {
+            // Ensures that the different horizons result in different and well-ordered times.
+
+            const double OstravaLat = 49.8209;
+            const double OstravaLong = 18.2625;
+            SunriseCalc nyc = new SunriseCalc(OstravaLat, OstravaLong);
+            _ = nyc.GetRiseAndSet(out DateTime normalRise, out DateTime normalSet, null, Horizon.Normal);
+            _ = nyc.GetRiseAndSet(out DateTime civilRise, out DateTime civilSet, null, Horizon.Civil);
+            _ = nyc.GetRiseAndSet(out DateTime nauticalRise, out DateTime nauticalSet, null, Horizon.Nautical);
+            _ = nyc.GetRiseAndSet(out DateTime astronomicalRise, out DateTime astronomicalSet, null, Horizon.Astronomical);
+
+            DateTime[] rises = { normalRise, civilRise, nauticalRise, astronomicalRise };
+            string[] riseTypes = { nameof(normalRise), nameof(civilRise), nameof(nauticalRise), nameof(astronomicalRise) };
+            DateTime[] sets = { normalSet, civilSet, nauticalSet, astronomicalSet };
+            string[] setTypes = { nameof(normalSet), nameof(civilSet), nameof(nauticalSet), nameof(astronomicalSet) };
+
+            // Compare rises
+            for (int i = 0; i < 3; i++)
+            {
+                for (int j = i + 1; j < 4; j++)
+                {
+                    Assert.IsTrue(rises[i] > rises[j], $"{riseTypes[i]} {rises[i]} not later than {riseTypes[j]} {rises[j]}");
+                    Assert.IsTrue(sets[i] < sets[j], $"{setTypes[i]} {sets[i]} not earlier than {setTypes[j]} {sets[j]}");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void SetGetProperties()
+        {
+            SunriseCalc calc = new SunriseCalc(0, 0);
+            Assert.AreEqual(0, calc.Latitude);
+            Assert.AreEqual(0, calc.Longitude);
+            Assert.AreEqual(DateTime.Today, calc.Day);
+
+            calc.GetSunrise(out DateTime lastRise);
+
+            const int daysToTest = 365 * 2; // Two years
+            for (int i = 1; i < daysToTest; i++)
+            {
+                calc.Day += TimeSpan.FromDays(1);
+                DateTime day = DateTime.Today + TimeSpan.FromDays(i);
+                Assert.AreEqual(day, calc.Day);
+                calc.GetSunrise(out DateTime thisRise);
+                Assert.AreNotEqual(lastRise, thisRise);
+                lastRise = thisRise;
+            }
+
+            Assert.AreEqual(0, calc.Latitude);
+            Assert.AreEqual(0, calc.Longitude);
+
+            const int divisionsToTest = 10;
+            for (int i = 1; i < divisionsToTest + 1; i++)
+            {
+                double lon = ((double)i / (divisionsToTest + 1) * (2 * SunriseCalc.MaxLongitude)) - SunriseCalc.MaxLongitude;
+
+                calc.Longitude = lon;
+                Assert.AreEqual(lon, calc.Longitude);
+
+                for (int j = 1; j < divisionsToTest + 1; j++)
+                {
+                    double lat = ((double)j / (divisionsToTest + 1) * (2 * SunriseCalc.MaxLatitude)) - SunriseCalc.MaxLatitude;
+
+                    calc.Latitude = lat;
+                    Assert.AreEqual(lat, calc.Latitude);
+
+                    calc.GetSunrise(out DateTime thisRise);
+                    Assert.AreNotEqual(lastRise, thisRise);
+                    lastRise = thisRise;
+                }
+            }
+
+            Assert.AreEqual(DateTime.Today + TimeSpan.FromDays(daysToTest - 1), calc.Day);
+        }
+
         [TestMethod]
         public void SimpleTestNYC()
         {
             // A simple spot test for one known location and time.
+
             DateTime testDate = new DateTime(2021, 7, 8);
-            TimeSpan NYCTimezoneOffset = TimeSpan.FromHours(4);
+            TimeSpan EDTOffset = TimeSpan.FromHours(-4);
             const double NYCLat = 40.7128;
             const double NYCLong = -74.0060;
-            DateTime actualSunrise = testDate.AddHours(5).AddMinutes(32);
-            DateTime actualSunset = testDate.AddHours(20).AddMinutes(29);
+            DateTime actualSunriseNYC = testDate.AddHours(5).AddMinutes(32);
+            DateTime actualSunsetNYC = testDate.AddHours(20).AddMinutes(29);
+            var nytz = TimeZoneInfo.FindSystemTimeZoneById("US Eastern Standard Time");
 
             SunriseCalc nyc = new SunriseCalc(NYCLat, NYCLong, testDate);
-            var result = nyc.GetRiseAndSet(out DateTime sunrise, out DateTime sunset);
+            var result = nyc.GetRiseAndSet(out DateTime sunriseUTC, out DateTime sunsetUTC);
+            var result2 = nyc.GetRiseAndSet(out DateTime sunrise, out DateTime sunset, nytz);
 
             // The sun always rises on New York City.
             Assert.AreEqual(DiurnalResult.NormalDay, result);
+            Assert.AreEqual(result, result2);
 
             // The sunrise and sunset should be within a minute of the expected value.
-            AssertAreWithinNMinutes(actualSunrise + NYCTimezoneOffset, sunrise);
-            AssertAreWithinNMinutes(actualSunset + NYCTimezoneOffset, sunset);
+            AssertAreWithinNMinutes(actualSunriseNYC, sunriseUTC + EDTOffset);
+            AssertAreWithinNMinutes(actualSunsetNYC, sunsetUTC + EDTOffset);
 
-            var riseResult = nyc.GetSunrise(out DateTime sunrise2);
+            // The library should correctly perform tz conversions
+            Assert.AreEqual(sunriseUTC + EDTOffset, sunrise);
+            Assert.AreEqual(sunsetUTC + EDTOffset, sunset);
+
+            var riseResult = nyc.GetSunrise(out DateTime sunrise2, nytz);
             Assert.AreEqual(DiurnalResult.NormalDay, riseResult);
 
             // We expect both methods to return the same value.
             Assert.AreEqual(sunrise, sunrise2);
 
-            var setResult = nyc.GetSunset(out DateTime sunset2);
+            var setResult = nyc.GetSunset(out DateTime sunset2, nytz);
             Assert.AreEqual(DiurnalResult.NormalDay, setResult);
             Assert.AreEqual(sunset, sunset2);
+
+            // We expect dusk - dawn to = day length
+            var dayLength = nyc.GetDayLength();
+            Assert.AreEqual(dayLength, sunsetUTC - sunriseUTC);
         }
-
-//        // It turns out that SunDate will often produce nonsense values, so *shrug* whatever.
-//#if TESTSUNDATE
-//        [TestMethod]
-//        public void SunDateCompare()
-//        {
-//            // Compare our results with the output from SunDate.cs. Note that SunDate.cs is not
-//            // included in the repository, as it has an incompatible license.
-//            // Since SunDate only works for today, we can only compare randomly selected locations,
-//            // not randomly selected days.
-
-//            // How many random locations to test against
-//            const int testCount = 1000;
-
-//            // This is the +/- variation we will tolerate between the output of SunDate.cs and our own.
-//            const int minuteAccuracy = 3;
-//            Random rng = new Random();
-
-//            // SunDate assumes that it is only used for the current system time zone and applies
-//            // the current system time zone offset to the results; this is obviously a bad idea,
-//            // which we have to adjust for.
-//            var tzOffset = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now);
-
-//            for (int i = 0; i < testCount; i++)
-//            {
-//                // Generate a random lat & lon to compare
-//                double lat = rng.NextDouble() * 2 * SunriseCalc.MaxLatitude - SunriseCalc.MaxLatitude;
-//                double lon = rng.NextDouble() * 2 * SunriseCalc.MaxLongitude - SunriseCalc.MaxLongitude;
-
-//                int[] sundateResults = SunDate.CalculateSunriseSunset(lat, lon);
-//                DateTime sundateRise;
-//                //DateTime sundateSet;
-//                try
-//                {
-//                    sundateRise = new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.Now.Day).AddHours(sundateResults[0] / 60).AddMinutes(sundateResults[0] % 60);
-//                    //sundateSet = new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.Now.Day).AddHours(sundateResults[1] / 60).AddMinutes(sundateResults[1] % 60);
-//                }
-//                catch (Exception e)
-//                {
-//                    var e2 = e;
-//                    throw e;
-//                }
-//                SunriseCalc sunriseCalc;
-//                try
-//                {
-//                    sunriseCalc = new SunriseCalc(lat, lon);
-//                }
-//                catch (Exception e)
-//                {
-//                    var e2 = e;
-//                    throw e;
-//                }
-//                var dayType = sunriseCalc.GetRiseAndSet(out DateTime rise, out DateTime set);
-//                if (dayType == DiurnalResult.NormalDay)
-//                {
-//                    try
-//                    {
-//                        AssertAreWithinNMinutes(sundateRise, rise + tzOffset, minuteAccuracy);
-//                        //AssertAreWithinNMinutes(sundateSet, set + tzOffset, minuteAccuracy);
-//                    }
-//                    catch (Exception e)
-//                    {
-//                        var e2 = e;
-//                        throw e;
-//                    }
-//                }
-//            }
-//        }
-//#endif
     }
 }
